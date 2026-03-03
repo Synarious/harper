@@ -536,12 +536,41 @@ function formatDomainKey(domain: string): string {
 	return `domainStatus ${domain}`;
 }
 
+const DOMAIN_ALIASES: Record<string, string[]> = {
+	'docs.proton.me': ['docs-editor.proton.me'],
+	'docs-editor.proton.me': ['docs.proton.me'],
+};
+
+function getEquivalentDomains(domain: string): string[] {
+	const normalized = domain.toLowerCase();
+	const aliases = DOMAIN_ALIASES[normalized] ?? [];
+	return [normalized, ...aliases];
+}
+
 /** Check if Harper has been enabled for a given domain. */
 async function enabledForDomain(domain: string): Promise<boolean | null> {
-	const req = await chrome.storage.local.get({
-		[formatDomainKey(domain)]: await enabledByDefault(),
-	});
-	return req[formatDomainKey(domain)];
+	const equivalentDomains = getEquivalentDomains(domain);
+	const keys = equivalentDomains.map((item) => formatDomainKey(item));
+	const req = await chrome.storage.local.get(keys);
+
+	let sawExplicitFalse = false;
+
+	for (const key of keys) {
+		const value = req[key];
+		if (value === true) {
+			return true;
+		}
+
+		if (value === false) {
+			sawExplicitFalse = true;
+		}
+	}
+
+	if (sawExplicitFalse) {
+		return false;
+	}
+
+	return await enabledByDefault();
 }
 
 /** Set whether Harper is enabled for a given domain.
@@ -556,7 +585,11 @@ async function setDomainEnable(domain: string, status: boolean, overrideValue = 
 	}
 
 	if (shouldSet) {
-		await chrome.storage.local.set({ [formatDomainKey(domain)]: status });
+		const equivalentDomains = getEquivalentDomains(domain);
+		const domainUpdates = Object.fromEntries(
+			equivalentDomains.map((item) => [formatDomainKey(item), status]),
+		);
+		await chrome.storage.local.set(domainUpdates);
 	}
 }
 
@@ -573,8 +606,10 @@ async function enabledByDefault(): Promise<boolean> {
 
 /** Check whether Harper's state has been set for a given domain. */
 async function isDomainSet(domain: string): Promise<boolean> {
-	const resp = await chrome.storage.local.get(formatDomainKey(domain));
-	return typeof resp[formatDomainKey(domain)] == 'boolean';
+	const equivalentDomains = getEquivalentDomains(domain);
+	const keys = equivalentDomains.map((item) => formatDomainKey(item));
+	const resp = await chrome.storage.local.get(keys);
+	return keys.some((key) => typeof resp[key] === 'boolean');
 }
 
 /** Reset the persistent user dictionary. */
